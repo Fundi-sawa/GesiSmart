@@ -1,0 +1,239 @@
+#include <Arduino.h>
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+#include "HX711.h"
+
+// Load cell pins
+const int LOADCELL_DOUT_PIN = 4;  // GPIO4 on ESP32
+const int LOADCELL_SCK_PIN = 5;   // GPIO5 on ESP32
+
+// Button pins for selecting cylinder type
+const int BUTTON_SELECT_PIN = 12;  // GPIO12 on ESP32 for selection
+const int BUTTON_CONFIRM_PIN = 14; // GPIO14 for confirming selection
+
+// Create instances for HX711 and LCD
+HX711 scale;
+LiquidCrystal_I2C lcd(0x27, 16, 2);  // Change 0x27 to your I2C address if different
+
+// Calibration factor for the load cell
+float calibration_factor = -7050/8.6 ;  // Adjust based on your load cell calibration
+float tare_weight = 8.6;           // Default tare weight (can change based on selection)
+float constant_net_weight = 6.0;            // Default net weight (can change based on selection)
+float constant_gross_weight = 14.6;         // Gross weight (tare + net)
+float lpg_density = 0.493;         // Density of LPG in kg/L
+float max_volume;                  // Maximum volume in liters (calculated based on net weight)
+
+// Cylinder data (tare and net weight for different cylinders)
+struct Cylinder {
+  float tare;
+  float net;
+  String name;
+};
+
+// Example cylinder database (You can add more cylinders with their specifications)
+Cylinder cylinders[] = {
+  {8.6, 6.0, "14.6kg Cylinder"},     // Tare 8.6kg, Net 6.0kg (Total 14.6kg)
+  {9.6, 15.0, "24.6kg Cylinder"},      // Tare 9.6kg, Net 15.0kg (Total 24.6kg)
+  {69.9, 38.0, "107.9kg Cylinder"}    // Tare 69.9kg, Net 38kg (Total 107.9kg)
+};
+
+int selected_cylinder = 0;  // Index for selected cylinder
+
+// Function prototype for setting tare weight
+void setTareWeight();
+void selectCylinder();
+void updateCylinderInfo();
+
+void setup() {
+  Serial.begin(115200);
+  
+  // Initialize load cell
+  scale.begin(LOADCELL_DOUT_PIN, LOADCELL_SCK_PIN);
+  scale.set_scale(calibration_factor); // Set the calibration factor
+  scale.tare();  // Reset the scale to 0
+  
+  // Initialize LCD
+  lcd.init();
+  lcd.backlight();
+  lcd.setCursor(0, 0);
+  lcd.print("Select Cylinder");
+
+  // Initialize buttons
+  pinMode(BUTTON_SELECT_PIN, INPUT_PULLUP);  // Set button pin as input with pull-up
+  pinMode(BUTTON_CONFIRM_PIN, INPUT_PULLUP); // Set button pin as input with pull-up
+  
+  Serial.println("Gas Level Monitor Initialized");
+
+  // Show cylinder selection
+  selectCylinder();
+}
+
+void loop() {
+  // Continuously monitor button presses to allow cylinder selection
+  if (digitalRead(BUTTON_CONFIRM_PIN) == LOW) {
+    setTareWeight();  // Set tare weight when confirmed
+  }
+
+  if (scale.is_ready()) {
+    float weight = scale.get_units(10);  // Average over 10 readings for stability
+    
+    // Apply tare weight to calculate net weight
+    float measured_net_weight = weight - tare_weight;  
+    
+    // Ensure net weight is not negative (for empty cylinders)
+    if (measured_net_weight < 0) measured_net_weight = 0;
+    
+    // Calculate the gas level as a percentage
+    float level_percentage = (measured_net_weight / constant_net_weight) * 100;
+
+    // Limit level_percentage between 0 and 100 for realistic values
+    if (level_percentage > 100) level_percentage = 100;
+    if (level_percentage < 0) level_percentage = 0;
+    
+    // Display the gas level percentage on the LCD
+    lcd.setCursor(0, 0);
+    lcd.print("Level: ");
+    lcd.print(level_percentage, 1);  // Display with 1 decimal place
+    lcd.print("%   ");  // Extra spaces to clear old data
+
+    // Display the weight on the second line
+    lcd.setCursor(0, 1);
+    lcd.print("Weight: ");
+    lcd.print(weight, 2);  // Show weight with 2 decimal places
+    lcd.print(" kg");
+
+    // Debug output in the Serial Monitor
+    Serial.print("Weight: ");
+    Serial.print(weight);
+    Serial.println(" kg");
+
+    Serial.print("Net Weight: ");
+    Serial.print(measured_net_weight);
+    Serial.println(" kg");
+
+    Serial.print("Level Percentage: ");
+    Serial.print(level_percentage);
+    Serial.println("%");
+  } else {
+    Serial.println("HX711 not found.");
+    lcd.setCursor(0, 0);
+    lcd.print("Sensor Error  ");
+  }
+
+  delay(1000);  // Update every second
+}
+
+// Function to set tare weight when the button is pressed
+void setTareWeight() {
+  scale.tare();  // Automatically sets the current weight as the tare weight
+  tare_weight = scale.get_units();  // Store this tare weight for future calculations
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Tare Set: ");
+  lcd.print(tare_weight, 2);  // Display the tare weight on the LCD
+  lcd.print(" kg");
+  
+  Serial.print("Tare Weight Set: ");
+  Serial.println(tare_weight);
+  delay(2000);  // Pause to let the user see the tare weight
+  lcd.clear();
+}
+
+// Function to cycle through available cylinders
+void selectCylinder() {
+  while (true) {
+    // Show selected cylinder on LCD
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print(cylinders[selected_cylinder].name);
+
+    // Wait for user to select the cylinder with the select button
+    if (digitalRead(BUTTON_SELECT_PIN) == LOW) {
+      selected_cylinder = (selected_cylinder + 1) % (sizeof(cylinders) / sizeof(cylinders[0]));
+      delay(500);  // Debounce delay
+    }
+
+    // Confirm cylinder selection
+    if (digitalRead(BUTTON_CONFIRM_PIN) == LOW) {
+      updateCylinderInfo();
+      lcd.clear();
+      lcd.setCursor(0, 0);
+      lcd.print("Selected: ");
+      lcd.print(cylinders[selected_cylinder].name);
+      delay(2000);  // Pause to confirm selection
+      lcd.clear();
+      break;
+    }
+  }
+}
+
+// Function to update cylinder information based on the selected cylinder
+void updateCylinderInfo() {
+  tare_weight = cylinders[selected_cylinder].tare;
+  constant_net_weight = cylinders[selected_cylinder].net;
+  constant_gross_weight = tare_weight + constant_net_weight;
+  max_volume = constant_net_weight / lpg_density;
+}
+
+// Function to select different cylinder
+void checkForAnotherCylinder() {
+  while (true) {
+    Serial.println("Do you want to measure another cylinder? Press CONFIRM to select YES.");
+    
+    // Wait for button press to confirm action
+    if (digitalRead(BUTTON_CONFIRM_PIN) == LOW) {
+      // Call the function to select a new cylinder
+      selectCylinder();
+    } else {
+      Serial.println("NO");
+      delay(1000);  // Wait for a second
+
+      Serial.println("Press CONFIRM again to exit, or continue measuring.");
+      // Check if user presses button to exit
+      if (digitalRead(BUTTON_CONFIRM_PIN) == LOW) {
+        Serial.println("Thanks for using GESI Smart Technologies!");
+        break;  // Exit the loop and end the function
+      }
+    }
+
+    // Add a small delay to debounce button presses
+    delay(200);
+  }
+}
+
+// #include <Arduino.h>
+// #include "HX711.h"
+// // #include "soc/rtc.h"
+// #include <LiquidCrystal_I2C.h>
+// #include "HX711.h"
+
+// // HX711 circuit wiring
+// const int LOADCELL_DOUT_PIN = 4;
+// const int LOADCELL_SCK_PIN = 5;
+
+// HX711 scale;
+
+// void setup() {
+//   Serial.begin(9600);
+//   scale.begin(LOADCELL_DOUT_PIN, LOADCELL_SCK_PIN);
+// }
+
+// void loop() {
+
+//   if (scale.is_ready()) {
+//     scale.set_scale();
+//     Serial.println("Tare... remove any weights from the scale.");
+//     delay(5000);
+//     scale.tare();
+//     Serial.println("Tare done...");
+//     Serial.print("Place a known weight on the scale...");
+//     delay(5000);
+//     long reading = scale.get_units(10);
+//     Serial.print("Result: ");
+//     Serial.println(reading);
+//   }
+//   else {
+//     Serial.println("HX711 not found.");
+//   }
+//   delay(1000);
+// }

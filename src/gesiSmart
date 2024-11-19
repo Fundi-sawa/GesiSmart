@@ -1,0 +1,122 @@
+#include <Arduino.h>
+#include <WiFi.h>
+#include <HTTPClient.h>
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+
+// Configuration
+const char* ssid = "Your_SSID";          // Replace with your Wi-Fi SSID
+const char* password = "Your_PASSWORD";  // Replace with your Wi-Fi password
+const char* serverName = "http://your-server-url.com/post-data"; // Replace with your server URL
+
+// Ultrasonic Sensor Pins
+const int trigPin = 5;
+const int echoPin = 18;
+
+// LCD Display Setup
+LiquidCrystal_I2C lcd(0x27, 16, 2); // I2C address, width, and height of the LCD
+
+// Buzzer Pin
+const int buzzerPin = 23;
+
+// Cylinder Heights (in cm)
+const float cylinderHeight18cm = 18.0;
+const float cylinderHeight45cm = 45.0;
+const float cylinderHeight100cm = 100.0;
+
+// Variables for distance measurement
+long duration;
+float distanceCm;
+float gasLevelPercentage;
+unsigned long delayTime = 5000; // Delay between measurements in milliseconds
+
+void setup() {
+  // Initialize Serial Monitor
+  Serial.begin(115200);
+
+  // Initialize Ultrasonic Sensor Pins
+  pinMode(trigPin, OUTPUT);
+  pinMode(echoPin, INPUT);
+
+  // Initialize Buzzer Pin
+  pinMode(buzzerPin, OUTPUT);
+
+  // Initialize LCD
+  lcd.begin();
+  lcd.backlight();
+  lcd.setCursor(0, 0);
+  lcd.print("Gas Monitor");
+  delay(2000);
+  lcd.clear();
+
+  // Connect to Wi-Fi
+  WiFi.begin(ssid, password);
+  Serial.print("Connecting to Wi-Fi");
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("\nConnected to Wi-Fi");
+  lcd.setCursor(0, 0);
+  lcd.print("WiFi Connected");
+}
+
+void loop() {
+  // Measure distance using Ultrasonic Sensor
+  digitalWrite(trigPin, LOW);
+  delayMicroseconds(2);
+  digitalWrite(trigPin, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(trigPin, LOW);
+  duration = pulseIn(echoPin, HIGH);
+  distanceCm = duration * 0.034 / 2;
+
+  // Calculate gas level percentage based on the distance measured
+  if (distanceCm <= cylinderHeight18cm) {
+    gasLevelPercentage = ((cylinderHeight18cm - distanceCm) / cylinderHeight18cm) * 100;
+  } else if (distanceCm <= cylinderHeight45cm) {
+    gasLevelPercentage = ((cylinderHeight45cm - distanceCm) / cylinderHeight45cm) * 100;
+  } else if (distanceCm <= cylinderHeight100cm) {
+    gasLevelPercentage = ((cylinderHeight100cm - distanceCm) / cylinderHeight100cm) * 100;
+  } else {
+    gasLevelPercentage = 0; // If distance is beyond measurable range, assume no gas
+  }
+
+  // Display gas level percentage on LCD
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Gas Level:");
+  lcd.setCursor(0, 1);
+  lcd.print(gasLevelPercentage);
+  lcd.print("%");
+
+  // Trigger buzzer if gas level is below a threshold (e.g., 20%)
+  if (gasLevelPercentage < 20.0) {
+    digitalWrite(buzzerPin, HIGH);  // Turn on buzzer
+    delay(1000);                    // Wait for 1 second
+    digitalWrite(buzzerPin, LOW);   // Turn off buzzer
+  }
+
+  // Send gas level data to the server
+  if (WiFi.status() == WL_CONNECTED) {
+    HTTPClient http;
+    http.begin(serverName);
+    String httpRequestData = "distance=" + String(distanceCm) + "&gasLevel=" + String(gasLevelPercentage);
+    http.addHeader("Content-Type", "application/x-www-form-urlencoded");
+
+    int httpResponseCode = http.POST(httpRequestData);
+    if (httpResponseCode > 0) {
+      String response = http.getString();
+      Serial.println(httpResponseCode);
+      Serial.println(response);
+    } else {
+      Serial.print("Error on sending POST: ");
+      Serial.println(httpResponseCode);
+    }
+    http.end();
+  } else {
+    Serial.println("WiFi Disconnected");
+  }
+
+  delay(delayTime);  // Wait before the next measurement
+}

@@ -3,15 +3,15 @@
 #define SerialAT Serial1
 #define TINY_GSM_DEBUG SerialMon
 #include <Arduino.h>
-#include <EEPROM.h>
-#include <Wire.h>
+// #include <EEPROM.h>
+//#include <Wire.h>  
 #include <SPIFFS.h>
 #include <TinyGsmClient.h>
 #include <WiFi.h>
 #include <ArduinoJson.h>
 #include <PubSubClient.h>
-#include <LiquidCrystal_I2C.h>
-#include "HX711.h"
+// #include <LiquidCrystal_I2C.h>
+// #include "HX711.h"
 #include <freertos/FreeRTOS.h>
 #include <esp_sleep.h>
 #include <esp_bt.h>
@@ -45,7 +45,7 @@ const char *pathconfNotification = "device/config";
 const char *pathSettingChanged = "device/setting/changed";
 const char *topicNotification = "log/parameter";
 const char *topicCritical = "notification/critical";
-constexpr uint8_t Buzzer = 4;
+// constexpr uint8_t Buzzer = 4;
 
 constexpr uint8_t Pot = 34;
 constexpr uint8_t ConfirmButton = 35;
